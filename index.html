@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Registrazione Evento</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .animate-spin { animation: spin 1s linear infinite; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+  .fade-in { animation: fadeIn .3s ease-out; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+  input:focus, select:focus, textarea:focus { outline: none; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const API = 'https://segreteria.caosgroup.it/api';
+
+const COUNTRY_CODES = [
+  { code:'+39', flag:'\u{1F1EE}\u{1F1F9}', name:'Italia', digits:[10] },
+  { code:'+41', flag:'\u{1F1E8}\u{1F1ED}', name:'Svizzera', digits:[9,10] },
+  { code:'+33', flag:'\u{1F1EB}\u{1F1F7}', name:'Francia', digits:[9] },
+  { code:'+49', flag:'\u{1F1E9}\u{1F1EA}', name:'Germania', digits:[10,11] },
+  { code:'+44', flag:'\u{1F1EC}\u{1F1E7}', name:'Regno Unito', digits:[10,11] },
+  { code:'+34', flag:'\u{1F1EA}\u{1F1F8}', name:'Spagna', digits:[9] },
+  { code:'+1',  flag:'\u{1F1FA}\u{1F1F8}', name:'USA / Canada', digits:[10] },
+  { code:'+43', flag:'\u{1F1E6}\u{1F1F9}', name:'Austria', digits:[10,11] },
+  { code:'+32', flag:'\u{1F1E7}\u{1F1EA}', name:'Belgio', digits:[9,10] },
+  { code:'+31', flag:'\u{1F1F3}\u{1F1F1}', name:'Paesi Bassi', digits:[9] },
+  { code:'+351',flag:'\u{1F1F5}\u{1F1F9}', name:'Portogallo', digits:[9] },
+  { code:'+48', flag:'\u{1F1F5}\u{1F1F1}', name:'Polonia', digits:[9] },
+  { code:'+40', flag:'\u{1F1F7}\u{1F1F4}', name:'Romania', digits:[9,10] },
+  { code:'+385',flag:'\u{1F1ED}\u{1F1F7}', name:'Croazia', digits:[8,9] },
+  { code:'+386',flag:'\u{1F1F8}\u{1F1EE}', name:'Slovenia', digits:[8] },
+];
+
+const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
+
+// State
+let eventInfo = null;
+let form = { firstName:'', lastName:'', email:'', phone:'', company:'', role:'', dietaryNeeds:'', customFieldValues:{}, companions:[], privacyAccepted:false, consents:{} };
+let phoneCountry = '+39';
+let fileUploads = {};
+let fieldErrors = {};
+let error = '';
+let submitted = false;
+let submitting = false;
+let currentStep = 0;
+let privacyOverlay = false;
+let overlayScrolledToBottom = false;
+let phoneDropdownOpen = false;
+let phoneSearch = '';
+
+const params = new URLSearchParams(location.search);
+const eventId = params.get('event') || params.get('eventId') || '';
+
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function fmtDate(d) { return d ? new Date(d).toLocaleDateString('it-IT',{day:'numeric',month:'long',year:'numeric'}) : ''; }
+function fmtTime(d) { return d && d.includes('T') ? new Date(d).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) : ''; }
+
+function render() {
+  const app = document.getElementById('app');
+  if (!eventId) { app.innerHTML = renderMessage('error','Link non valido','Manca l\'ID dell\'evento nell\'URL.'); return; }
+  if (!eventInfo && !error) { app.innerHTML = renderLoading(); return; }
+  if (error && !eventInfo) { app.innerHTML = renderMessage('error','Registrazione non disponibile',error); return; }
+  if (eventInfo.registrationClosed) { app.innerHTML = renderMessage('closed','Iscrizioni chiuse','Il periodo di iscrizione per questo evento si \u00e8 concluso.'); return; }
+  if (eventInfo.registrationOpen === false) {
+    const d = eventInfo.dates?.registrationOpen ? fmtDate(eventInfo.dates.registrationOpen) : '';
+    app.innerHTML = renderMessage('waiting','Iscrizioni non ancora aperte', d ? 'Le iscrizioni apriranno il '+d+'.' : '');
+    return;
+  }
+  if (submitted) { app.innerHTML = renderSuccess(); return; }
+  app.innerHTML = renderForm();
+  attachEvents();
+}
+
+function getPC() { return eventInfo?.portalConfig?.brandPrimaryColor || '#0d9488'; }
+function getVisual() { return eventInfo?.formConfig?.visual || {}; }
+function getBgStyle() {
+  const v = getVisual();
+  if (v.backgroundGradient) return 'background:'+v.backgroundGradient;
+  if (v.backgroundColor) return 'background-color:'+v.backgroundColor;
+  return 'background-color:#f9fafb';
+}
+function getCardRadius() { return (getVisual().cardBorderRadius ?? 16)+'px'; }
+function getShadow() { const m={none:'',sm:'0 1px 2px rgba(0,0,0,.05)',md:'0 4px 6px rgba(0,0,0,.1)',lg:'0 10px 15px rgba(0,0,0,.1)'}; return m[getVisual().cardShadow||'lg']||m.lg; }
+
+function renderLoading() {
+  return '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f9fafb"><svg class="animate-spin" style="width:32px;height:32px;color:#0d9488" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity=".25"/><path d="M4 12a8 8 0 018-8" stroke-linecap="round"/></svg></div>';
+}
+
+function renderMessage(type, title, msg) {
+  const icons = { error:'\u274C', closed:'\u{1F551}', waiting:'\u{1F552}' };
+  return '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'+getBgStyle()+'"><div style="background:#fff;border-radius:16px;box-shadow:0 10px 15px rgba(0,0,0,.1);padding:32px;text-align:center;max-width:400px;width:100%"><div style="font-size:48px;margin-bottom:12px">'+(icons[type]||'\u274C')+'</div><h2 style="font-size:18px;font-weight:700;color:#111827;margin:0 0 8px">'+esc(title)+'</h2><p style="font-size:14px;color:#6b7280;margin:0">'+esc(msg)+'</p></div></div>';
+}
+
+function renderSuccess() {
+  const pc = getPC(), fc = eventInfo.formConfig||{}, v = getVisual(), ed = eventInfo.dates||{};
+  const startDate = fmtDate(ed.eventStart), startTime = fmtTime(ed.eventStart), endDate = fmtDate(ed.eventEnd);
+  const isUp = submitted === 'updated';
+  let recap = '';
+  if (!isUp) {
+    const l = [];
+    if (form.firstName) l.push('<b>Nome:</b> '+esc(form.firstName)+' '+esc(form.lastName));
+    if (form.email) l.push('<b>Email:</b> '+esc(form.email));
+    if (form.phone) l.push('<b>Telefono:</b> '+esc(form.phone));
+    if (form.company) l.push('<b>Azienda:</b> '+esc(form.company));
+    if (form.companions.length) l.push('<b>Accompagnatori:</b> '+form.companions.map(c=>esc(c.firstName)+' '+esc(c.lastName)).join(', '));
+    if (l.length) recap = '<div style="border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px"><p style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.05em;margin:0 0 8px">Riepilogo iscrizione</p>'+l.map(x=>'<p style="font-size:12px;color:#374151;margin:2px 0">'+x+'</p>').join('')+'</div>';
+  }
+  const redir = fc.successRedirectUrl ? '<div style="text-align:center"><a href="'+esc(fc.successRedirectUrl)+'" style="display:inline-block;padding:10px 24px;background:'+pc+';color:#fff;font-weight:700;border-radius:12px;text-decoration:none">Continua</a></div>' : '';
+  return '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'+getBgStyle()+'"><div class="fade-in" style="background:#fff;box-shadow:'+getShadow()+';padding:32px;max-width:420px;width:100%;border-radius:'+getCardRadius()+';'+(v.fontFamily?'font-family:'+v.fontFamily:'')+'"><div style="text-align:center;margin-bottom:24px"><div style="font-size:64px;margin-bottom:16px;color:'+pc+'">\u2705</div><h2 style="font-size:20px;font-weight:700;margin:0 0 8px">'+esc(isUp?'Dati aggiornati':(fc.successTitle||'Iscrizione completata'))+'</h2><p style="font-size:14px;color:#6b7280;margin:0">'+(isUp?'I tuoi dati per <b>'+esc(eventInfo.name)+'</b> sono stati aggiornati.':(fc.successMessage?esc(fc.successMessage):'Ti sei registrato con successo a <b>'+esc(eventInfo.name)+'</b>. Riceverai un\'email di conferma.'))+'</p></div><div style="background:#f9fafb;border-radius:12px;padding:16px;margin-bottom:16px"><h3 style="font-size:14px;font-weight:700;color:#111827;margin:0 0 8px">'+esc(eventInfo.name)+'</h3>'+(startDate?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4C5} '+esc(startDate)+(startTime?' \u2014 '+startTime:'')+(endDate&&endDate!==startDate?' \u2192 '+esc(endDate):'')+'</p>':'')+(eventInfo.venue?.name?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4CD} '+esc(eventInfo.venue.name)+(eventInfo.venue.address?', '+esc(eventInfo.venue.address):'')+(eventInfo.venue.city?' \u2014 '+esc(eventInfo.venue.city):'')+'</p>':'')+'</div>'+recap+redir+'</div></div>';
+}
+
+function renderForm() {
+  const pc = getPC(), fc = eventInfo.formConfig||{}, v = getVisual();
+  const showDates = fc.showDates !== undefined ? fc.showDates : true;
+  const showCap = fc.showCapacity !== undefined ? fc.showCapacity : true;
+  const showDesc = fc.showDescription !== false;
+  const compEnabled = fc.companionsEnabled !== undefined ? fc.companionsEnabled : true;
+  const maxComp = fc.maxCompanions || 0;
+  const wizardSteps = fc.wizardMode && fc.wizardSteps?.length ? fc.wizardSteps : null;
+  const sections = fc.sections || [];
+  const fields = getResolvedFields();
+
+  // Header
+  let hdr = '';
+  const logo = eventInfo.portalConfig?.brandLogo;
+  if (logo) {
+    const logoUrl = logo.startsWith('http') ? logo : API.replace('/api','') + logo;
+    hdr += '<img src="'+esc(logoUrl)+'" alt="Logo" style="height:48px;margin:0 auto 12px;display:block" crossorigin="anonymous">';
+  } else {
+    hdr += '<div style="width:56px;height:56px;border-radius:16px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:20px;font-weight:700;background:'+pc+'">'+esc(eventInfo.name.charAt(0))+'</div>';
+  }
+  hdr += '<h1 style="font-size:24px;font-weight:900;color:'+(v.titleColor||'#111827')+';margin:0;text-align:center">'+esc(eventInfo.name)+'</h1>';
+  if (showDesc && eventInfo.description) {
+    hdr += fc.descriptionHtml ? '<div style="font-size:14px;color:#6b7280;margin-top:4px;text-align:center">'+fc.descriptionHtml+'</div>' : '<p style="font-size:14px;color:#6b7280;margin:4px 0 0;text-align:center">'+esc(eventInfo.description)+'</p>';
+  }
+  const meta = [];
+  if (showDates && eventInfo.dates?.eventStart) meta.push(new Date(eventInfo.dates.eventStart).toLocaleDateString('it-IT')+' \u2014 '+new Date(eventInfo.dates.eventEnd).toLocaleDateString('it-IT'));
+  if (showCap) meta.push(eventInfo.currentCount+'/'+eventInfo.capacity+' iscritti');
+  if (meta.length) hdr += '<p style="font-size:12px;color:#9ca3af;margin:8px 0 0;text-align:center">'+meta.join(' &middot; ')+'</p>';
+  if (fc.headerText) hdr += '<p style="font-size:14px;color:#6b7280;margin:8px 0 0;text-align:center;font-style:italic">'+esc(fc.headerText)+'</p>';
+
+  // Cover
+  let cover = '';
+  if (v.coverImage || eventInfo.coverImage) cover = '<div style="margin-bottom:16px;border-radius:16px;overflow:hidden"><img src="'+esc(v.coverImage||eventInfo.coverImage)+'" alt="" style="width:100%;height:192px;object-fit:cover"></div>';
+
+  // Waitlist
+  let wl = '';
+  if (eventInfo.isWaitlist) wl = '<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="font-size:20px">\u{1F465}</span><p style="font-size:14px;color:#92400e;font-weight:500;margin:0">'+esc(fc.waitlistMessage||"Evento al completo. La tua iscrizione sar\u00e0 inserita in lista d'attesa.")+'</p></div>';
+
+  // Fields
+  let fhtml = '';
+  if (wizardSteps) {
+    const step = wizardSteps[currentStep];
+    if (step) {
+      fhtml += '<div style="margin-bottom:16px"><div style="display:flex;gap:8px;margin-bottom:16px">';
+      wizardSteps.forEach((s,i) => { fhtml += '<div style="flex:1;height:4px;border-radius:2px;background:'+(i<=currentStep?pc:'#e5e7eb')+'"></div>'; });
+      fhtml += '</div><h2 style="font-size:16px;font-weight:700;margin:0 0 16px">'+esc(step.title)+'</h2>';
+      for (const sid of step.sectionIds) {
+        const sec = sections.find(s=>s.id===sid);
+        if (!sec) continue;
+        const sf = fields.filter(f=>sec.fieldIds.includes(f.id)&&isFieldVisible(f,fields));
+        if (sf.length) fhtml += renderSection(sf, sec);
+      }
+      fhtml += '</div>';
+      const isLast = currentStep >= wizardSteps.length-1;
+      fhtml += '<div style="display:flex;justify-content:space-between;margin-top:16px">';
+      fhtml += currentStep>0 ? '<button type="button" onclick="prevStep()" style="padding:10px 20px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;font-size:14px;font-weight:600;cursor:pointer">\u2190 Indietro</button>' : '<div></div>';
+      if (!isLast) fhtml += '<button type="button" onclick="nextStep()" style="padding:10px 20px;border:none;border-radius:12px;background:'+pc+';color:#fff;font-size:14px;font-weight:700;cursor:pointer">Avanti \u2192</button>';
+      fhtml += '</div>';
+    }
+  } else if (sections.length) {
+    for (const sec of sections.sort((a,b)=>a.sortOrder-b.sortOrder)) {
+      const sf = fields.filter(f=>sec.fieldIds.includes(f.id)&&isFieldVisible(f,fields));
+      if (sf.length) fhtml += renderSection(sf, sec);
+    }
+    const allSids = sections.flatMap(s=>s.fieldIds);
+    const unsec = fields.filter(f=>!allSids.includes(f.id)&&isFieldVisible(f,fields));
+    if (unsec.length) fhtml += renderSection(unsec);
+  } else {
+    fhtml += '<div style="display:flex;flex-wrap:wrap;gap:12px">';
+    for (const f of fields) { if (isFieldVisible(f,fields)) fhtml += renderFieldHtml(f); }
+    fhtml += '</div>';
+  }
+
+  // Companions
+  let compHtml = '';
+  if (compEnabled && maxComp > 0) {
+    compHtml += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb"><h3 style="font-size:14px;font-weight:700;color:#374151;margin:0 0 8px">Accompagnatori (max '+maxComp+')</h3>';
+    form.companions.forEach((c,i) => {
+      compHtml += '<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center"><input type="text" value="'+esc(c.firstName)+'" placeholder="Nome" data-comp="'+i+'" data-field="firstName" class="comp-input" style="flex:1;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px"><input type="text" value="'+esc(c.lastName)+'" placeholder="Cognome" data-comp="'+i+'" data-field="lastName" class="comp-input" style="flex:1;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px"><button type="button" onclick="removeCompanion('+i+')" style="width:32px;height:32px;border-radius:50%;border:1px solid #fca5a5;background:#fef2f2;color:#ef4444;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">\u00d7</button></div>';
+    });
+    if (form.companions.length < maxComp) compHtml += '<button type="button" onclick="addCompanion()" style="padding:8px 16px;border:1px dashed #d1d5db;border-radius:12px;background:transparent;font-size:13px;color:#6b7280;cursor:pointer;width:100%">+ Aggiungi accompagnatore</button>';
+    compHtml += '</div>';
+  }
+
+  // Privacy
+  let privHtml = '';
+  const priv = eventInfo.privacyConfig;
+  if (priv) {
+    privHtml += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">';
+    privHtml += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer"><input type="checkbox" id="privacyCheck" '+(form.privacyAccepted?'checked':'')+' style="margin-top:3px;accent-color:'+pc+'"><span style="font-size:13px;color:#374151">'+(priv.title||'Accetto la')+' <a href="javascript:void(0)" onclick="showPrivacy()" style="color:'+pc+';text-decoration:underline;font-weight:600">privacy policy</a> *</span></label>';
+    const consents = priv.requiredConsents || priv.consents || [];
+    for (const c of consents) {
+      privHtml += '<div style="margin-top:12px"><p style="font-size:13px;color:#374151;margin:0 0 4px;font-weight:500">'+esc(c.label)+' '+(c.required?'*':'')+'</p>';
+      if (c.detailText) privHtml += '<p style="font-size:11px;color:#6b7280;margin:0 0 6px">'+esc(c.detailText)+'</p>';
+      privHtml += '<div style="display:flex;gap:12px"><label style="display:flex;align-items:center;gap:4px;font-size:13px;color:#374151;cursor:pointer"><input type="radio" name="consent_'+c.id+'" value="true" '+(form.consents[c.id]===true?'checked':'')+' data-consent="'+c.id+'" class="consent-radio" style="accent-color:'+pc+'"> Acconsento</label><label style="display:flex;align-items:center;gap:4px;font-size:13px;color:#374151;cursor:pointer"><input type="radio" name="consent_'+c.id+'" value="false" '+(form.consents[c.id]===false?'checked':'')+' data-consent="'+c.id+'" class="consent-radio" style="accent-color:'+pc+'"> Non acconsento</label></div></div>';
+    }
+    privHtml += '</div>';
+  }
+
+  // Error
+  let errHtml = error ? '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px 16px;margin-top:16px;display:flex;align-items:center;gap:8px"><span style="color:#ef4444;font-size:18px">\u26a0</span><p style="font-size:13px;color:#991b1b;margin:0">'+esc(error)+'</p></div>' : '';
+
+  // Submit
+  const isLast = !wizardSteps || currentStep >= (wizardSteps?.length||1)-1;
+  const subHtml = isLast ? '<button type="submit" '+(submitting?'disabled':'')+' style="width:100%;padding:12px;border:none;border-radius:12px;background:'+pc+';color:#fff;font-size:15px;font-weight:700;cursor:pointer;margin-top:20px;opacity:'+(submitting?.6:1)+';display:flex;align-items:center;justify-content:center;gap:8px">'+(submitting?'<svg class="animate-spin" style="width:18px;height:18px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity=".25"/><path d="M4 12a8 8 0 018-8" stroke-linecap="round"/></svg> Invio in corso...':(fc.submitButtonText||'Invia iscrizione'))+'</button>' : '';
+
+  let footer = fc.footerText ? '<p style="font-size:12px;color:#9ca3af;margin:12px 0 0;text-align:center">'+esc(fc.footerText)+'</p>' : '';
+
+  // Privacy overlay
+  let overlay = '';
+  if (privacyOverlay && priv?.text) {
+    overlay = '<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closePrivacy()"><div style="background:#fff;border-radius:16px;max-width:600px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden"><div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center"><h3 style="font-size:16px;font-weight:700;margin:0">Privacy Policy</h3><button onclick="closePrivacy()" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280">\u00d7</button></div><div id="privacyScrollArea" style="padding:20px;overflow-y:auto;flex:1;font-size:13px;color:#374151;line-height:1.6" onscroll="checkPrivacyScroll()">'+priv.text+'</div><div style="padding:12px 20px;border-top:1px solid #e5e7eb;text-align:center"><button onclick="acceptPrivacy()" '+(!overlayScrolledToBottom&&priv.text.length>500?'disabled style="padding:10px 32px;border:none;border-radius:12px;background:#d1d5db;color:#fff;font-size:14px;font-weight:700;cursor:not-allowed"':'style="padding:10px 32px;border:none;border-radius:12px;background:'+pc+';color:#fff;font-size:14px;font-weight:700;cursor:pointer"')+'>'+(!overlayScrolledToBottom&&priv.text.length>500?'Scorri per accettare \u2193':'Ho letto e accetto')+'</button></div></div></div>';
+  }
+
+  return '<div style="min-height:100vh;padding:32px 16px;'+getBgStyle()+';'+(v.fontFamily?'font-family:'+v.fontFamily:'')+'"><div style="max-width:512px;margin:0 auto">'+cover+'<div style="text-align:center;margin-bottom:24px">'+hdr+'</div>'+wl+'<form id="regForm" style="background:#fff;border-radius:'+getCardRadius()+';box-shadow:'+getShadow()+';padding:24px" onsubmit="return handleSubmit(event)">'+fhtml+compHtml+privHtml+errHtml+subHtml+'</form>'+footer+'</div>'+overlay+'</div>';
+}
+
+// Field resolution
+function getResolvedFields() {
+  const fc = eventInfo.formConfig;
+  if (!fc?.fields?.length) {
+    return [
+      {id:'f1',type:'builtin',fieldKey:'firstName',visible:true,required:true,sortOrder:0,width:'half',resolvedLabel:'Nome',inputType:'builtin'},
+      {id:'f2',type:'builtin',fieldKey:'lastName',visible:true,required:true,sortOrder:1,width:'half',resolvedLabel:'Cognome',inputType:'builtin'},
+      {id:'f3',type:'builtin',fieldKey:'email',visible:true,required:true,sortOrder:2,width:'full',resolvedLabel:'Email',inputType:'builtin'},
+      {id:'f4',type:'builtin',fieldKey:'phone',visible:true,required:false,sortOrder:3,width:'half',resolvedLabel:'Telefono',inputType:'builtin'},
+      {id:'f5',type:'builtin',fieldKey:'company',visible:true,required:false,sortOrder:4,width:'half',resolvedLabel:'Azienda',inputType:'builtin'},
+      {id:'f6',type:'builtin',fieldKey:'role',visible:true,required:false,sortOrder:5,width:'full',resolvedLabel:'Ruolo',inputType:'builtin'},
+    ];
+  }
+  const DEF = {firstName:{l:'Nome'},lastName:{l:'Cognome'},email:{l:'Email'},phone:{l:'Telefono'},company:{l:'Azienda'},role:{l:'Ruolo'},dietaryNeeds:{l:'Esigenze alimentari'}};
+  return fc.fields.filter(f=>f.visible).sort((a,b)=>a.sortOrder-b.sortOrder).map(f => {
+    if (f.type==='builtin') { const d=DEF[f.fieldKey||'']||{}; return {...f,resolvedLabel:f.label||d.l||f.fieldKey||'',inputType:'builtin',customField:null}; }
+    const cf = (eventInfo.customFields||[]).find(c=>c.id===f.customFieldId);
+    return {...f, resolvedLabel:f.label||cf?.label||'', inputType:'custom', customField:cf};
+  });
+}
+
+function isFieldVisible(field, allFields) {
+  const conds = eventInfo.formConfig?.conditionals || [];
+  const rule = conds.find(c=>c.fieldId===field.id);
+  if (!rule) return true;
+  const dep = allFields.find(f=>f.id===rule.dependsOnFieldId);
+  if (!dep) return true;
+  const dv = dep.inputType==='builtin' ? (form[dep.fieldKey]||'') : (form.customFieldValues[dep.customFieldId]||'');
+  if (rule.operator==='equals') return dv===rule.value;
+  if (rule.operator==='not_equals') return dv!==rule.value;
+  if (rule.operator==='not_empty') return !!dv;
+  return true;
+}
+
+function renderSection(sectionFields, section) {
+  let h = '<div style="margin-bottom:20px">';
+  if (section) { h+='<h3 style="font-size:14px;font-weight:700;color:#1f2937;margin:0 0 4px">'+esc(section.title)+'</h3>'; if(section.description) h+='<p style="font-size:12px;color:#6b7280;margin:0 0 8px">'+esc(section.description)+'</p>'; }
+  h += '<div style="display:flex;flex-wrap:wrap;gap:12px">';
+  for (const f of sectionFields) h += renderFieldHtml(f);
+  return h+'</div></div>';
+}
+
+function renderFieldHtml(field) {
+  const pc=getPC(), w=field.width==='half'?'calc(50% - 6px)':'100%';
+  const ek=field.fieldKey||field.customFieldId||'';
+  const errS=fieldErrors[ek]?'border-color:#fca5a5':'';
+  const errM=fieldErrors[ek];
+
+  if (field.inputType==='builtin' && field.fieldKey) {
+    const k=field.fieldKey, val=form[k]||'';
+    if (k==='phone') {
+      const sel=COUNTRY_CODES.find(c=>c.code===phoneCountry)||COUNTRY_CODES[0];
+      return '<div style="width:'+w+';position:relative"><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;display:block">'+esc(field.resolvedLabel)+' '+(field.required?'*':'')+'</label><div style="display:flex"><button type="button" onclick="togglePhoneDD()" style="display:flex;align-items:center;gap:6px;padding:10px 8px 10px 12px;background:#f3f4f6;border:1px solid '+(errS?'#fca5a5':'#e5e7eb')+';border-radius:12px 0 0 12px;font-size:14px;font-weight:700;cursor:pointer;min-width:100px"><span style="font-size:16px;line-height:1">'+sel.flag+'</span> <span>'+sel.code+'</span> <span style="font-size:10px;color:#9ca3af">\u25BC</span></button><input type="tel" value="'+esc(val)+'" placeholder="'+(sel.digits[0]||10)+' cifre" data-field="phone" class="builtin-input" style="flex:1;padding:10px 16px;background:#f9fafb;border:1px solid '+(errS?'#fca5a5':'#e5e7eb')+';border-left:none;border-radius:0 12px 12px 0;font-size:14px"></div>'+renderPhoneDD()+(errM?'<p style="font-size:10px;color:#ef4444;font-weight:500;margin:4px 0 0">'+esc(errM)+'</p>':'')+((!errM&&field.helpText)?'<p style="font-size:10px;color:#9ca3af;margin:4px 0 0">'+esc(field.helpText)+'</p>':'')+'</div>';
+    }
+    if (k==='email') {
+      const valid=val&&EMAIL_RE.test(val.trim());
+      return '<div style="width:'+w+'"><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;display:block">'+esc(field.resolvedLabel)+' '+(field.required?'*':'')+'</label><input type="email" value="'+esc(val)+'" placeholder="'+(field.placeholder||'nome@esempio.it')+'" data-field="email" class="builtin-input" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid '+(errS?'#fca5a5':'#e5e7eb')+';border-radius:12px;font-size:14px">'+(errM?'<p style="font-size:10px;color:#ef4444;font-weight:500;margin:4px 0 0">'+esc(errM)+'</p>':'')+((!errM&&valid)?'<p style="font-size:10px;color:#22c55e;font-weight:500;margin:4px 0 0">\u2713 Email valida</p>':'')+'</div>';
+    }
+    return '<div style="width:'+w+'"><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;display:block">'+esc(field.resolvedLabel)+' '+(field.required?'*':'')+'</label><input type="text" value="'+esc(val)+'" placeholder="'+esc(field.placeholder||'')+'" data-field="'+k+'" class="builtin-input" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px">'+(field.helpText?'<p style="font-size:10px;color:#9ca3af;margin:4px 0 0">'+esc(field.helpText)+'</p>':'')+'</div>';
+  }
+
+  if (field.inputType==='custom' && field.customField) return renderCF(field, w);
+  return '';
+}
+
+function renderCF(field, w) {
+  const cf=field.customField, pc=getPC(), cid=cf.id, val=form.customFieldValues[cid]||'';
+  let inp='';
+  if (cf.type==='select'||cf.type==='radio') {
+    const sty=cf.displayStyle||'dropdown';
+    if (sty==='buttons'||sty==='cards') {
+      const isC=sty==='cards';
+      inp='<div style="display:'+(isC?'grid':'flex')+';'+(isC?'grid-template-columns:repeat(2,1fr)':'flex-wrap:wrap')+';gap:8px;margin-top:4px">';
+      for (const o of (cf.options||[])) { const s=val===o; inp+='<button type="button" data-cfid="'+cid+'" data-val="'+esc(o)+'" class="cf-sel-btn" style="padding:'+(isC?'16px':'8px 16px')+';border-radius:12px;font-size:14px;font-weight:700;border:2px solid '+(s?pc:'#e5e7eb')+';background:'+(s?pc+'15':'transparent')+';color:'+(s?pc:'#4b5563')+';cursor:pointer;'+(isC?'text-align:center':'')+'">'+esc(o)+'</button>'; }
+      inp+='</div>';
+    } else if (sty==='radio'||sty==='radio-horizontal') {
+      inp='<div style="display:flex;'+(sty==='radio'?'flex-direction:column;gap:8px':'flex-wrap:wrap;gap:12px')+';margin-top:4px">';
+      for (const o of (cf.options||[])) inp+='<label style="display:flex;align-items:center;gap:4px;font-size:14px;color:#374151;cursor:pointer"><input type="radio" name="cf_'+cid+'" value="'+esc(o)+'" '+(val===o?'checked':'')+' data-cfid="'+cid+'" class="cf-radio" style="accent-color:'+pc+'"> '+esc(o)+'</label>';
+      inp+='</div>';
+    } else {
+      inp='<select data-cfid="'+cid+'" class="cf-select" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px"><option value="">Seleziona...</option>'+(cf.options||[]).map(o=>'<option value="'+esc(o)+'" '+(val===o?'selected':'')+'>'+esc(o)+'</option>').join('')+'</select>';
+    }
+  } else if (cf.type==='multiselect') {
+    let sel=[]; try{sel=JSON.parse(val);if(!Array.isArray(sel))sel=[];}catch{sel=val?val.split(',').filter(Boolean):[];}
+    inp='<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">';
+    for (const o of (cf.options||[])) { const s=sel.includes(o); inp+='<button type="button" data-cfid="'+cid+'" data-val="'+esc(o)+'" class="cf-multi-btn" style="padding:6px 12px;border-radius:12px;font-size:12px;font-weight:700;border:1px solid '+(s?'transparent':'#e5e7eb')+';background:'+(s?pc:'#f9fafb')+';color:'+(s?'#fff':'#4b5563')+';cursor:pointer">'+esc(o)+'</button>'; }
+    inp+='</div>';
+  } else if (cf.type==='textarea') {
+    inp='<textarea data-cfid="'+cid+'" class="cf-text" rows="3" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px;resize:none">'+esc(val)+'</textarea>';
+  } else if (cf.type==='checkbox') {
+    inp='<label style="display:flex;align-items:center;gap:8px;font-size:14px;color:#374151;cursor:pointer"><input type="checkbox" '+(val==='true'?'checked':'')+' data-cfid="'+cid+'" class="cf-checkbox" style="accent-color:'+pc+'"> '+esc((cf.options&&cf.options[0])||cf.label)+'</label>';
+  } else if (cf.type==='file') {
+    const file=fileUploads[cid];
+    inp='<label style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:#f9fafb;border:2px dashed #e5e7eb;border-radius:12px;cursor:pointer"><span style="font-size:20px;color:#9ca3af">\u{1F4CE}</span><span style="flex:1;font-size:14px;color:'+(file?'#374151':'#9ca3af')+'">'+(file?esc(file.name):'Scegli file'+(cf.accept?' ('+cf.accept+')':'')+'...')+'</span><input type="file" '+(cf.accept?'accept="'+esc(cf.accept)+'"':'')+' data-cfid="'+cid+'" class="cf-file" style="display:none"></label>';
+    if (cf.maxSizeMB) inp+='<p style="font-size:10px;color:#9ca3af;margin:4px 0 0">Max '+cf.maxSizeMB+' MB</p>';
+  } else if (cf.type==='number') {
+    inp='<input type="number" value="'+esc(val)+'" data-cfid="'+cid+'" class="cf-text" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px">';
+  } else if (cf.type==='date') {
+    inp='<input type="date" value="'+esc(val)+'" data-cfid="'+cid+'" class="cf-text" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px">';
+  } else {
+    inp='<input type="text" value="'+esc(val)+'" placeholder="'+esc(field.placeholder||'')+'" data-cfid="'+cid+'" class="cf-text" style="width:100%;padding:10px 16px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:12px;font-size:14px">';
+  }
+  return '<div style="width:'+w+'"><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;display:block">'+esc(field.resolvedLabel)+' '+(field.required?'*':'')+'</label>'+inp+(field.helpText?'<p style="font-size:10px;color:#9ca3af;margin:4px 0 0">'+esc(field.helpText)+'</p>':'')+'</div>';
+}
+
+function renderPhoneDD() {
+  if (!phoneDropdownOpen) return '';
+  const fil=phoneSearch.trim()?COUNTRY_CODES.filter(c=>c.name.toLowerCase().includes(phoneSearch.toLowerCase())||c.code.includes(phoneSearch)):COUNTRY_CODES;
+  return '<div style="position:absolute;z-index:50;margin-top:4px;width:260px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,.15);overflow:hidden" id="phoneDD"><div style="padding:8px;border-bottom:1px solid #f3f4f6"><input type="text" id="phoneSI" value="'+esc(phoneSearch)+'" placeholder="Cerca paese..." style="width:100%;padding:8px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;font-size:12px"></div><div style="max-height:192px;overflow-y:auto">'+(fil.length===0?'<p style="font-size:12px;color:#9ca3af;text-align:center;padding:12px">Nessun risultato</p>':fil.map(c=>'<button type="button" data-country="'+c.code+'" class="country-btn" style="width:100%;display:flex;align-items:center;gap:12px;padding:8px 12px;border:none;background:'+(c.code===phoneCountry?'#f0fdfa':'transparent')+';cursor:pointer;text-align:left"><span style="font-size:16px">'+c.flag+'</span><span style="flex:1;font-size:12px;font-weight:700;color:#374151">'+esc(c.name)+'</span><span style="font-size:12px;font-family:monospace;color:#6b7280">'+c.code+'</span></button>').join(''))+'</div></div>';
+}
+
+// Events
+function attachEvents() {
+  document.querySelectorAll('.builtin-input').forEach(el=>el.addEventListener('input',e=>{const k=e.target.dataset.field;if(k==='phone')form.phone=e.target.value.replace(/[^\d\s\-().]/g,'');else form[k]=e.target.value;delete fieldErrors[k];}));
+  document.querySelectorAll('.cf-text').forEach(el=>el.addEventListener('input',e=>{form.customFieldValues[e.target.dataset.cfid]=e.target.value;}));
+  document.querySelectorAll('.cf-select').forEach(el=>el.addEventListener('change',e=>{form.customFieldValues[e.target.dataset.cfid]=e.target.value;render();}));
+  document.querySelectorAll('.cf-radio').forEach(el=>el.addEventListener('change',e=>{form.customFieldValues[e.target.dataset.cfid]=e.target.value;render();}));
+  document.querySelectorAll('.cf-sel-btn').forEach(el=>el.addEventListener('click',e=>{const b=e.target.closest('.cf-sel-btn');form.customFieldValues[b.dataset.cfid]=b.dataset.val;render();}));
+  document.querySelectorAll('.cf-multi-btn').forEach(el=>el.addEventListener('click',e=>{const b=e.target.closest('.cf-multi-btn'),cid=b.dataset.cfid,o=b.dataset.val;let s=[];try{s=JSON.parse(form.customFieldValues[cid]||'[]');if(!Array.isArray(s))s=[];}catch{s=[];}s.includes(o)?s=s.filter(x=>x!==o):s.push(o);form.customFieldValues[cid]=JSON.stringify(s);render();}));
+  document.querySelectorAll('.cf-checkbox').forEach(el=>el.addEventListener('change',e=>{form.customFieldValues[e.target.dataset.cfid]=String(e.target.checked);}));
+  document.querySelectorAll('.cf-file').forEach(el=>el.addEventListener('change',e=>{const f=e.target.files?.[0];if(f){fileUploads[e.target.dataset.cfid]=f;render();}}));
+  const pc=document.getElementById('privacyCheck');if(pc)pc.addEventListener('change',e=>{form.privacyAccepted=e.target.checked;});
+  document.querySelectorAll('.consent-radio').forEach(el=>el.addEventListener('change',e=>{form.consents[e.target.dataset.consent]=e.target.value==='true';}));
+  document.querySelectorAll('.comp-input').forEach(el=>el.addEventListener('input',e=>{const i=parseInt(e.target.dataset.comp),f=e.target.dataset.field;if(form.companions[i])form.companions[i][f]=e.target.value;}));
+  const psi=document.getElementById('phoneSI');if(psi){psi.focus();psi.addEventListener('input',e=>{phoneSearch=e.target.value;render();});}
+  document.querySelectorAll('.country-btn').forEach(el=>el.addEventListener('click',e=>{phoneCountry=e.target.closest('.country-btn').dataset.country;phoneDropdownOpen=false;phoneSearch='';render();}));
+  document.addEventListener('click',e=>{if(phoneDropdownOpen&&!e.target.closest('#phoneDD')&&!e.target.closest('[onclick*="togglePhoneDD"]')){phoneDropdownOpen=false;phoneSearch='';render();}},{once:true});
+}
+
+// Actions
+window.togglePhoneDD=()=>{phoneDropdownOpen=!phoneDropdownOpen;phoneSearch='';render();};
+window.showPrivacy=()=>{privacyOverlay=true;overlayScrolledToBottom=false;render();};
+window.closePrivacy=()=>{privacyOverlay=false;render();};
+window.acceptPrivacy=()=>{form.privacyAccepted=true;privacyOverlay=false;render();};
+window.checkPrivacyScroll=()=>{const el=document.getElementById('privacyScrollArea');if(el&&el.scrollTop+el.clientHeight>=el.scrollHeight-20){overlayScrolledToBottom=true;render();}};
+window.addCompanion=()=>{form.companions.push({firstName:'',lastName:''});render();};
+window.removeCompanion=i=>{form.companions.splice(i,1);render();};
+window.nextStep=()=>{currentStep++;render();window.scrollTo(0,0);};
+window.prevStep=()=>{currentStep--;render();window.scrollTo(0,0);};
+
+window.handleSubmit=async e=>{
+  e.preventDefault(); error=''; fieldErrors={};
+  if(!form.firstName||!form.lastName||!form.email){error='Nome, cognome e email sono obbligatori.';render();return false;}
+  if(!EMAIL_RE.test(form.email.trim())){fieldErrors.email='Indirizzo email non valido';error='Indirizzo email non valido';render();return false;}
+  if(form.phone.trim()){const d=form.phone.replace(/[\s\-().]/g,'');if(!/^\d+$/.test(d)){fieldErrors.phone='Inserisci solo cifre';error='Inserisci solo cifre';render();return false;}const c=COUNTRY_CODES.find(c=>c.code===phoneCountry);if(c&&!c.digits.includes(d.length)){const m=c.name+': '+c.digits.join(' o ')+' cifre (inserite '+d.length+')';fieldErrors.phone=m;error=m;render();return false;}}
+  const fields=getResolvedFields();
+  for(const f of fields){if(!f.required||!isFieldVisible(f,fields))continue;if(f.inputType==='custom'&&f.customField){const v=form.customFieldValues[f.customField.id]||'';if(f.customField.type==='file'){if(!fileUploads[f.customField.id]){error='Campo obbligatorio: '+f.resolvedLabel;render();return false;}}else if(!v.trim()){error='Campo obbligatorio: '+f.resolvedLabel;render();return false;}}}
+  for(const cf of(eventInfo.customFields||[]).filter(c=>c.type==='file')){const file=fileUploads[cf.id];if(file&&cf.maxSizeMB&&file.size>cf.maxSizeMB*1024*1024){error=cf.label+': file troppo grande (max '+cf.maxSizeMB+' MB)';render();return false;}}
+  if(!form.privacyAccepted){error='Devi accettare la privacy policy.';render();return false;}
+  const cons=eventInfo.privacyConfig?.requiredConsents||eventInfo.privacyConfig?.consents||[];
+  for(const c of cons.filter(c=>c.required)){if(form.consents[c.id]===undefined||form.consents[c.id]===null){error='Devi rispondere al consenso: '+c.label;render();return false;}}
+  submitting=true;render();
+  const fp=form.phone.trim()?phoneCountry+' '+form.phone.replace(/[\s\-().]/g,''):'';
+  const sd={...form,phone:fp,privacyAccepted:true};
+  try{const hf=Object.keys(fileUploads).length>0;let r;if(hf){const fd=new FormData();fd.append('data',JSON.stringify(sd));for(const[fid,file]of Object.entries(fileUploads))fd.append('file__'+fid,file);r=await fetch(API+'/seg/event/'+eventId+'/register',{method:'POST',body:fd});}else{r=await fetch(API+'/seg/event/'+eventId+'/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sd)});}const data=await r.json();if(!r.ok)throw new Error(data.error||'Errore durante la registrazione.');submitted=data.updated?'updated':'new';}catch(err){error=err.message;}
+  submitting=false;render();return false;
+};
+
+// Init
+async function init(){
+  if(!eventId){render();return;}
+  try{const r=await fetch(API+'/seg/event/'+eventId+'/registration-info');if(!r.ok){const d=await r.json();throw new Error(d.error||'Errore');}eventInfo=await r.json();document.title='Registrazione \u2014 '+eventInfo.name;}catch(e){error=e.message;}
+  render();
+}
+init();
+</script>
+</body>
+</html>
