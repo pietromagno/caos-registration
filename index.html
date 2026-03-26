@@ -224,11 +224,8 @@ function renderForm() {
 
   let footer = fc.footerText ? '<p style="font-size:12px;color:#9ca3af;margin:12px 0 0;text-align:center">'+esc(fc.footerText)+'</p>' : '';
 
-  // Privacy overlay
-  let overlay = '';
-  if (privacyOverlay && priv?.text) {
-    overlay = '<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px" onclick="if(event.target===this)closePrivacy()"><div style="background:#fff;border-radius:16px;max-width:600px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden"><div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center"><h3 style="font-size:16px;font-weight:700;margin:0">Privacy Policy</h3><button onclick="closePrivacy()" style="border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280">\u00d7</button></div><div id="privacyScrollArea" style="padding:20px;overflow-y:auto;flex:1;font-size:13px;color:#374151;line-height:1.6" onscroll="checkPrivacyScroll()">'+priv.text+'</div><div style="padding:12px 20px;border-top:1px solid #e5e7eb;text-align:center"><button onclick="acceptPrivacy()" '+(!overlayScrolledToBottom&&priv.text.length>500?'disabled style="padding:10px 32px;border:none;border-radius:12px;background:#d1d5db;color:#fff;font-size:14px;font-weight:700;cursor:not-allowed"':'style="padding:10px 32px;border:none;border-radius:12px;background:'+pc+';color:#fff;font-size:14px;font-weight:700;cursor:pointer"')+'>'+(!overlayScrolledToBottom&&priv.text.length>500?'Scorri per accettare \u2193':'Ho letto e accetto')+'</button></div></div></div>';
-  }
+  // Privacy overlay — rendered via DOM to avoid HTML escaping issues
+  let overlay = '<div id="privacyOverlayRoot"></div>';
 
   return '<div style="min-height:100vh;padding:32px 16px;'+getBgStyle()+';'+(v.fontFamily?'font-family:'+v.fontFamily:'')+'"><div style="max-width:512px;margin:0 auto">'+cover+'<div style="text-align:center;margin-bottom:24px">'+hdr+'</div>'+wl+'<form id="regForm" style="background:#fff;border-radius:'+getCardRadius()+';box-shadow:'+getShadow()+';padding:24px" onsubmit="return handleSubmit(event)">'+fhtml+compHtml+privHtml+errHtml+subHtml+'</form>'+footer+'</div>'+overlay+'</div>';
 }
@@ -364,10 +361,53 @@ function attachEvents() {
 
 // Actions
 window.togglePhoneDD=()=>{phoneDropdownOpen=!phoneDropdownOpen;phoneSearch='';render();};
-window.showPrivacy=()=>{privacyOverlay=true;overlayScrolledToBottom=false;render();};
-window.closePrivacy=()=>{privacyOverlay=false;render();};
-window.acceptPrivacy=()=>{form.privacyAccepted=true;privacyOverlay=false;render();};
-window.checkPrivacyScroll=()=>{const el=document.getElementById('privacyScrollArea');if(el&&el.scrollTop+el.clientHeight>=el.scrollHeight-20){overlayScrolledToBottom=true;render();}};
+window.showPrivacy=()=>{
+  const priv=eventInfo.privacyConfig;if(!priv?.text)return;
+  const pc=getPC();
+  const root=document.getElementById('privacyOverlayRoot');
+  // Backdrop
+  const backdrop=document.createElement('div');
+  backdrop.id='privacyBackdrop';
+  backdrop.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center;padding:16px';
+  backdrop.onclick=e=>{if(e.target===backdrop)window.closePrivacy();};
+  // Modal
+  const modal=document.createElement('div');
+  modal.style.cssText='background:#fff;border-radius:16px;max-width:600px;width:100%;max-height:80vh;display:flex;flex-direction:column;overflow:hidden';
+  // Header
+  const hdr=document.createElement('div');
+  hdr.style.cssText='padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center';
+  hdr.innerHTML='<h3 style="font-size:16px;font-weight:700;margin:0">Privacy Policy</h3>';
+  const closeBtn=document.createElement('button');
+  closeBtn.textContent='\u00d7';closeBtn.style.cssText='border:none;background:none;font-size:20px;cursor:pointer;color:#6b7280';
+  closeBtn.onclick=()=>window.closePrivacy();
+  hdr.appendChild(closeBtn);
+  // Body — privacy text injected via innerHTML safely
+  const body=document.createElement('div');
+  body.style.cssText='padding:20px;overflow-y:auto;flex:1;font-size:13px;color:#374151;line-height:1.6';
+  body.innerHTML=priv.text;
+  body.onscroll=()=>{if(body.scrollTop+body.clientHeight>=body.scrollHeight-20){overlayScrolledToBottom=true;updateAcceptBtn();}};
+  // Footer with accept button
+  const ftr=document.createElement('div');
+  ftr.style.cssText='padding:12px 20px;border-top:1px solid #e5e7eb;text-align:center';
+  const acceptBtn=document.createElement('button');
+  acceptBtn.id='privacyAcceptBtn';
+  const updateAcceptBtn=()=>{
+    const canAccept=overlayScrolledToBottom||priv.text.length<=500;
+    acceptBtn.disabled=!canAccept;
+    acceptBtn.textContent=canAccept?'Ho letto e accetto':'Scorri per accettare \u2193';
+    acceptBtn.style.cssText='padding:10px 32px;border:none;border-radius:12px;font-size:14px;font-weight:700;'+(canAccept?'background:'+pc+';color:#fff;cursor:pointer':'background:#d1d5db;color:#fff;cursor:not-allowed');
+  };
+  acceptBtn.onclick=()=>{if(!acceptBtn.disabled)window.acceptPrivacy();};
+  updateAcceptBtn();
+  ftr.appendChild(acceptBtn);
+  modal.append(hdr,body,ftr);
+  backdrop.appendChild(modal);
+  root.innerHTML='';
+  root.appendChild(backdrop);
+};
+window.closePrivacy=()=>{const r=document.getElementById('privacyOverlayRoot');if(r)r.innerHTML='';};
+window.acceptPrivacy=()=>{form.privacyAccepted=true;window.closePrivacy();render();};
+window.checkPrivacyScroll=()=>{};
 window.addCompanion=()=>{form.companions.push({firstName:'',lastName:''});render();};
 window.removeCompanion=i=>{form.companions.splice(i,1);render();};
 window.nextStep=()=>{currentStep++;render();window.scrollTo(0,0);};
