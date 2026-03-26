@@ -205,7 +205,7 @@ function renderForm() {
   const priv = eventInfo.privacyConfig;
   if (priv) {
     privHtml += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">';
-    privHtml += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer"><input type="checkbox" id="privacyCheck" '+(form.privacyAccepted?'checked':'')+' style="margin-top:3px;accent-color:'+pc+'"><span style="font-size:13px;color:#374151">'+(priv.title||'Accetto la')+' <a href="javascript:void(0)" onclick="showPrivacy()" style="color:'+pc+';text-decoration:underline;font-weight:600">privacy policy</a> *</span></label>';
+    privHtml += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer" onclick="event.preventDefault();if(!form.privacyAccepted)showPrivacy();"><input type="checkbox" id="privacyCheck" '+(form.privacyAccepted?'checked':'')+' style="margin-top:3px;accent-color:'+pc+';pointer-events:none"><span style="font-size:13px;color:#374151">'+(priv.title||'Accetto la')+' <span style="color:'+pc+';text-decoration:underline;font-weight:600">privacy policy</span> *</span></label>';
     const consents = priv.requiredConsents || priv.consents || [];
     for (const c of consents) {
       privHtml += '<div style="margin-top:12px"><p style="font-size:13px;color:#374151;margin:0 0 4px;font-weight:500">'+esc(c.label)+' '+(c.required?'*':'')+'</p>';
@@ -351,7 +351,7 @@ function attachEvents() {
   document.querySelectorAll('.cf-multi-btn').forEach(el=>el.addEventListener('click',e=>{const b=e.target.closest('.cf-multi-btn'),cid=b.dataset.cfid,o=b.dataset.val;let s=[];try{s=JSON.parse(form.customFieldValues[cid]||'[]');if(!Array.isArray(s))s=[];}catch{s=[];}s.includes(o)?s=s.filter(x=>x!==o):s.push(o);form.customFieldValues[cid]=JSON.stringify(s);render();}));
   document.querySelectorAll('.cf-checkbox').forEach(el=>el.addEventListener('change',e=>{form.customFieldValues[e.target.dataset.cfid]=String(e.target.checked);}));
   document.querySelectorAll('.cf-file').forEach(el=>el.addEventListener('change',e=>{const f=e.target.files?.[0];if(f){fileUploads[e.target.dataset.cfid]=f;render();}}));
-  const pc=document.getElementById('privacyCheck');if(pc)pc.addEventListener('change',e=>{form.privacyAccepted=e.target.checked;});
+  // Privacy checkbox is read-only — controlled by overlay accept button
   document.querySelectorAll('.consent-radio').forEach(el=>el.addEventListener('change',e=>{form.consents[e.target.dataset.consent]=e.target.value==='true';}));
   document.querySelectorAll('.comp-input').forEach(el=>el.addEventListener('input',e=>{const i=parseInt(e.target.dataset.comp),f=e.target.dataset.field;if(form.companions[i])form.companions[i][f]=e.target.value;}));
   const psi=document.getElementById('phoneSI');if(psi){psi.focus();psi.addEventListener('input',e=>{phoneSearch=e.target.value;render();});}
