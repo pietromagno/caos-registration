@@ -464,11 +464,78 @@ window.handleSubmit=async e=>{
   submitting=false;render();return false;
 };
 
-// Init
+// ═══════════════════ DECLINE PAGE ═══════════════════
+const action = params.get('action') || 'register';
+const declineEmail = params.get('email') || '';
+let declineEventInfo = null;
+let declineSubmitted = false;
+let declineSubmitting = false;
+let declineError = '';
+
+function renderDecline() {
+  const app = document.getElementById('app');
+  if (!eventId) { app.innerHTML = renderMessage('error','Link non valido','Manca l\'ID dell\'evento.'); return; }
+  if (!declineEventInfo && !declineError) { app.innerHTML = renderLoading(); return; }
+  if (declineError && !declineEventInfo) { app.innerHTML = renderMessage('error','Evento non trovato',declineError); return; }
+
+  const pc = declineEventInfo.portalConfig?.brandPrimaryColor || '#0d9488';
+  const v = declineEventInfo.formConfig?.visual || {};
+  const bg = v.backgroundGradient ? 'background:'+v.backgroundGradient : (v.backgroundColor ? 'background-color:'+v.backgroundColor : 'background-color:#f9fafb');
+  const radius = (v.cardBorderRadius ?? 16)+'px';
+  const shadow = {none:'',sm:'0 1px 2px rgba(0,0,0,.05)',md:'0 4px 6px rgba(0,0,0,.1)',lg:'0 10px 15px rgba(0,0,0,.1)'}[v.cardShadow||'lg']||'0 10px 15px rgba(0,0,0,.1)';
+  const ed = declineEventInfo.dates || {};
+  const startDate = fmtDate(ed.eventStart), startTime = fmtTime(ed.eventStart), endDate = fmtDate(ed.eventEnd);
+
+  if (declineSubmitted) {
+    const regUrl = location.origin + location.pathname + '?event=' + eventId;
+    app.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'+bg+'"><div class="fade-in" style="background:#fff;box-shadow:'+shadow+';padding:32px;max-width:420px;width:100%;border-radius:'+radius+'"><div style="text-align:center;margin-bottom:24px"><div style="font-size:64px;margin-bottom:16px">\u2705</div><h2 style="font-size:20px;font-weight:700;margin:0 0 8px">Grazie per averci informato</h2><p style="font-size:14px;color:#6b7280;margin:0">La tua risposta \u00e8 stata registrata.</p></div><div style="background:#f9fafb;border-radius:12px;padding:16px;margin-bottom:16px"><h3 style="font-size:14px;font-weight:700;color:#111827;margin:0 0 8px">'+esc(declineEventInfo.name)+'</h3>'+(startDate?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4C5} '+esc(startDate)+(startTime?' \u2014 '+startTime:'')+(endDate&&endDate!==startDate?' \u2192 '+esc(endDate):'')+'</p>':'')+(declineEventInfo.venue?.name?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4CD} '+esc(declineEventInfo.venue.name)+(declineEventInfo.venue.address?', '+esc(declineEventInfo.venue.address):'')+(declineEventInfo.venue.city?' \u2014 '+esc(declineEventInfo.venue.city):'')+'</p>':'')+'</div><div style="text-align:center;margin-top:24px;padding-top:16px;border-top:1px solid #f3f4f6"><p style="font-size:14px;color:#6b7280;margin:0 0 12px">Hai cambiato idea?</p><a href="'+esc(regUrl)+'" style="display:inline-block;padding:10px 24px;background:'+pc+';color:#fff;font-weight:700;border-radius:12px;text-decoration:none">Iscriviti all\'evento</a></div></div></div>';
+    return;
+  }
+
+  let errHtml = declineError ? '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:8px"><span style="color:#ef4444;font-size:18px">\u26a0</span><p style="font-size:13px;color:#991b1b;margin:0">'+esc(declineError)+'</p></div>' : '';
+
+  app.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;'+bg+'"><div style="background:#fff;box-shadow:'+shadow+';padding:32px;max-width:420px;width:100%;border-radius:'+radius+'"><div style="text-align:center;margin-bottom:24px"><div style="font-size:64px;margin-bottom:16px;color:#9ca3af">\u274C</div><h2 style="font-size:20px;font-weight:700;margin:0 0 8px">Confermi di non partecipare a '+esc(declineEventInfo.name)+'?</h2></div><div style="background:#f9fafb;border-radius:12px;padding:16px;margin-bottom:24px"><h3 style="font-size:14px;font-weight:700;color:#111827;margin:0 0 8px">'+esc(declineEventInfo.name)+'</h3>'+(startDate?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4C5} '+esc(startDate)+(startTime?' \u2014 '+startTime:'')+(endDate&&endDate!==startDate?' \u2192 '+esc(endDate):'')+'</p>':'')+(declineEventInfo.venue?.name?'<p style="font-size:12px;color:#6b7280;margin:2px 0">\u{1F4CD} '+esc(declineEventInfo.venue.name)+(declineEventInfo.venue.address?', '+esc(declineEventInfo.venue.address):'')+(declineEventInfo.venue.city?' \u2014 '+esc(declineEventInfo.venue.city):'')+'</p>':'')+'</div><div style="margin-bottom:24px"><label style="font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;display:block">Email</label><input type="email" value="'+esc(declineEmail)+'" readonly style="width:100%;padding:10px 16px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:12px;font-size:14px;color:#6b7280;cursor:not-allowed"></div>'+errHtml+'<button onclick="handleDecline()" '+(declineSubmitting?'disabled':'')+' style="width:100%;padding:12px;border:none;border-radius:12px;background:#4b5563;color:#fff;font-size:15px;font-weight:700;cursor:pointer;opacity:'+(declineSubmitting?.6:1)+';display:flex;align-items:center;justify-content:center;gap:8px">'+(declineSubmitting?'Invio in corso...':'Conferma \u2014 Non parteciper\u00f2')+'</button></div></div>';
+}
+
+window.handleDecline = async () => {
+  if (!declineEmail) { declineError = 'Email mancante nel link'; renderDecline(); return; }
+  declineError = '';
+  declineSubmitting = true;
+  renderDecline();
+  try {
+    const r = await fetch(API+'/seg/event/'+eventId+'/decline', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: declineEmail }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Errore durante la conferma');
+    declineSubmitted = true;
+  } catch (err) {
+    declineError = err.message;
+  }
+  declineSubmitting = false;
+  renderDecline();
+};
+
+// ═══════════════════ INIT ═══════════════════
 async function init(){
-  if(!eventId){render();return;}
-  try{const r=await fetch(API+'/seg/event/'+eventId+'/registration-info');if(!r.ok){const d=await r.json();throw new Error(d.error||'Errore');}eventInfo=await r.json();document.title='Registrazione \u2014 '+eventInfo.name;}catch(e){error=e.message;}
-  render();
+  if(!eventId){ if(action==='decline') renderDecline(); else render(); return; }
+
+  if (action === 'decline') {
+    // Decline flow
+    try {
+      const r = await fetch(API+'/seg/event/'+eventId+'/decline-info');
+      if(!r.ok){const d=await r.json();throw new Error(d.error||'Errore');}
+      declineEventInfo = await r.json();
+      document.title = 'Non partecipo \u2014 ' + declineEventInfo.name;
+    } catch(e) { declineError = e.message; }
+    renderDecline();
+  } else {
+    // Registration flow
+    try{const r=await fetch(API+'/seg/event/'+eventId+'/registration-info');if(!r.ok){const d=await r.json();throw new Error(d.error||'Errore');}eventInfo=await r.json();document.title='Registrazione \u2014 '+eventInfo.name;}catch(e){error=e.message;}
+    render();
+  }
 }
 init();
 </script>
