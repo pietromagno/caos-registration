@@ -206,12 +206,6 @@ function renderForm() {
   if (priv) {
     privHtml += '<div style="margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb">';
     privHtml += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer" onclick="event.preventDefault();if(!form.privacyAccepted)showPrivacy();"><input type="checkbox" id="privacyCheck" '+(form.privacyAccepted?'checked':'')+' style="margin-top:3px;accent-color:'+pc+';pointer-events:none"><span style="font-size:13px;color:#374151">'+(priv.title||'Accetto la')+' <span style="color:'+pc+';text-decoration:underline;font-weight:600">privacy policy</span> *</span></label>';
-    const consents = priv.requiredConsents || priv.consents || [];
-    for (const c of consents) {
-      privHtml += '<div style="margin-top:12px"><p style="font-size:13px;color:#374151;margin:0 0 4px;font-weight:500">'+esc(c.label)+' '+(c.required?'*':'')+'</p>';
-      if (c.detailText) privHtml += '<p style="font-size:11px;color:#6b7280;margin:0 0 6px">'+esc(c.detailText)+'</p>';
-      privHtml += '<div style="display:flex;gap:12px"><label style="display:flex;align-items:center;gap:4px;font-size:13px;color:#374151;cursor:pointer"><input type="radio" name="consent_'+c.id+'" value="true" '+(form.consents[c.id]===true?'checked':'')+' data-consent="'+c.id+'" class="consent-radio" style="accent-color:'+pc+'"> Acconsento</label><label style="display:flex;align-items:center;gap:4px;font-size:13px;color:#374151;cursor:pointer"><input type="radio" name="consent_'+c.id+'" value="false" '+(form.consents[c.id]===false?'checked':'')+' data-consent="'+c.id+'" class="consent-radio" style="accent-color:'+pc+'"> Non acconsento</label></div></div>';
-    }
     privHtml += '</div>';
   }
 
@@ -352,7 +346,7 @@ function attachEvents() {
   document.querySelectorAll('.cf-checkbox').forEach(el=>el.addEventListener('change',e=>{form.customFieldValues[e.target.dataset.cfid]=String(e.target.checked);}));
   document.querySelectorAll('.cf-file').forEach(el=>el.addEventListener('change',e=>{const f=e.target.files?.[0];if(f){fileUploads[e.target.dataset.cfid]=f;render();}}));
   // Privacy checkbox is read-only — controlled by overlay accept button
-  document.querySelectorAll('.consent-radio').forEach(el=>el.addEventListener('change',e=>{form.consents[e.target.dataset.consent]=e.target.value==='true';}));
+  // Consent radios are now inside the privacy overlay
   document.querySelectorAll('.comp-input').forEach(el=>el.addEventListener('input',e=>{const i=parseInt(e.target.dataset.comp),f=e.target.dataset.field;if(form.companions[i])form.companions[i][f]=e.target.value;}));
   const psi=document.getElementById('phoneSI');if(psi){psi.focus();psi.addEventListener('input',e=>{phoneSearch=e.target.value;render();});}
   document.querySelectorAll('.country-btn').forEach(el=>el.addEventListener('click',e=>{phoneCountry=e.target.closest('.country-btn').dataset.country;phoneDropdownOpen=false;phoneSearch='';render();}));
@@ -386,21 +380,60 @@ window.showPrivacy=()=>{
   body.style.cssText='padding:20px;overflow-y:auto;flex:1;font-size:13px;color:#374151;line-height:1.6';
   body.innerHTML=priv.text;
   body.onscroll=()=>{if(body.scrollTop+body.clientHeight>=body.scrollHeight-20){overlayScrolledToBottom=true;updateAcceptBtn();}};
+  // Consents section inside overlay
+  const consentsDiv=document.createElement('div');
+  consentsDiv.style.cssText='padding:16px 20px;border-top:1px solid #e5e7eb';
+  const consents=priv.requiredConsents||priv.consents||[];
+  if(consents.length){
+    for(const c of consents){
+      const cDiv=document.createElement('div');
+      cDiv.style.cssText='margin-bottom:12px';
+      const lbl=document.createElement('p');
+      lbl.style.cssText='font-size:13px;color:#374151;margin:0 0 6px;font-weight:500';
+      lbl.textContent=c.label+(c.required?' *':'');
+      cDiv.appendChild(lbl);
+      if(c.detailText){const dt=document.createElement('p');dt.style.cssText='font-size:11px;color:#6b7280;margin:0 0 6px';dt.textContent=c.detailText;cDiv.appendChild(dt);}
+      const radios=document.createElement('div');
+      radios.style.cssText='display:flex;gap:16px';
+      ['true','false'].forEach(val=>{
+        const lab=document.createElement('label');
+        lab.style.cssText='display:flex;align-items:center;gap:4px;font-size:13px;color:#374151;cursor:pointer';
+        const inp=document.createElement('input');
+        inp.type='radio';inp.name='ov_consent_'+c.id;inp.value=val;
+        inp.style.cssText='accent-color:'+pc;
+        if(form.consents[c.id]===(val==='true'))inp.checked=true;
+        inp.onchange=()=>{form.consents[c.id]=(val==='true');updateAcceptBtn();};
+        lab.appendChild(inp);
+        lab.appendChild(document.createTextNode(val==='true'?'Acconsento':'Non acconsento'));
+        radios.appendChild(lab);
+      });
+      cDiv.appendChild(radios);
+      consentsDiv.appendChild(cDiv);
+    }
+  }
   // Footer with accept button
   const ftr=document.createElement('div');
   ftr.style.cssText='padding:12px 20px;border-top:1px solid #e5e7eb;text-align:center';
   const acceptBtn=document.createElement('button');
   acceptBtn.id='privacyAcceptBtn';
+  const errMsg=document.createElement('p');
+  errMsg.style.cssText='font-size:11px;color:#ef4444;margin:0 0 8px;display:none';
+  ftr.appendChild(errMsg);
   const updateAcceptBtn=()=>{
-    const canAccept=overlayScrolledToBottom||priv.text.length<=500;
+    const scrolled=overlayScrolledToBottom||priv.text.length<=500;
+    const requiredConsents=consents.filter(c=>c.required);
+    const allConsentsAnswered=requiredConsents.every(c=>form.consents[c.id]!==undefined&&form.consents[c.id]!==null);
+    const canAccept=scrolled&&allConsentsAnswered;
     acceptBtn.disabled=!canAccept;
-    acceptBtn.textContent=canAccept?'Ho letto e accetto':'Scorri per accettare \u2193';
+    if(!scrolled){acceptBtn.textContent='Scorri per accettare \u2193';errMsg.style.display='none';}
+    else if(!allConsentsAnswered){acceptBtn.textContent='Ho letto e accetto';errMsg.textContent='Rispondi a tutti i consensi obbligatori';errMsg.style.display='block';}
+    else{acceptBtn.textContent='Ho letto e accetto';errMsg.style.display='none';}
     acceptBtn.style.cssText='padding:10px 32px;border:none;border-radius:12px;font-size:14px;font-weight:700;'+(canAccept?'background:'+pc+';color:#fff;cursor:pointer':'background:#d1d5db;color:#fff;cursor:not-allowed');
   };
   acceptBtn.onclick=()=>{if(!acceptBtn.disabled)window.acceptPrivacy();};
   updateAcceptBtn();
   ftr.appendChild(acceptBtn);
-  modal.append(hdr,body,ftr);
+  modal.append(hdr,body,consentsDiv,ftr);
   backdrop.appendChild(modal);
   root.innerHTML='';
   root.appendChild(backdrop);
